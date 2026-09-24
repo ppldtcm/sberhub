@@ -3,6 +3,10 @@
 from copy import deepcopy
 import os
 from pathlib import Path
+import time
+
+from config import CONFIG
+from logging_utils import event as log_event
 
 
 DEFAULT_MODEL = "deepseek-flash"
@@ -13,10 +17,12 @@ class RequestLimitExceeded(RuntimeError):
     """Внешняя страховка от бесконечных платных запросов при отладке."""
 
 
+class ModelTimeout(RuntimeError):
+    """Модель не ответила за отведённое время. Повторный запрос не делается."""
+
+
 class DeepSeekModel:
-    def __init__(self, model=DEFAULT_MODEL, *, client=None, watchdog=8):
-        if type(watchdog) is not int or watchdog < 1:
-            raise ValueError("watchdog должен быть положительным целым")
+    def __init__(self, model=DEFAULT_MODEL, *, client=None, run_id="local"):
         if client is None:
             from dotenv import load_dotenv
 
@@ -29,30 +35,65 @@ class DeepSeekModel:
             client = OpenAI(
                 api_key=api_key,
                 base_url="https://api.deepseek.com",
-                timeout=20.0,
+                timeout=CONFIG.model_timeout,
                 max_retries=0,
             )
         self.client = client
         self.model = model
-        self.watchdog = watchdog
+        self.run_id = run_id
         self.calls = 0
         self.last_response = None
+        self._step = 0
 
     def __call__(self, *, messages, tools):
-        # Учебный предохранитель клиента; это не нормальная остановка harness.
-        if self.calls >= self.watchdog:
+        watchdog = CONFIG.watchdog
+        model_timeout = CONFIG.model_timeout
+        CONFIG.validate()
+
+        if self.calls >= watchdog:
+            log_event(
+                run_id=self.run_id, step=self._step, stage="request", status="skipped",
+                error={"type": "RequestLimitExceeded", "watchdog": watchdog},
+            )
             raise RequestLimitExceeded(
-                f"Достигнут клиентский лимит: {self.watchdog} запросов. Работа не завершена."
+                f"Достигнут клиентский лимит: {watchdog} запросов. Работа не завершена."
             )
         self.calls += 1
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            tools=tools,
-            stream=False,
-            max_tokens=1024,
-            extra_body={"thinking": {"type": "disabled"}},
+        self._step += 1
+        step = self._step
+
+        log_event(
+            run_id=self.run_id, step=step, stage="request", status="start",
+            details={"model": self.model, "watchdog": watchdog, "model_timeout": model_timeout},
         )
+        started = time.monotonic()
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=tools,
+                stream=False,
+                max_tokens=1024,
+                timeout=model_timeout,
+                extra_body={"thinking": {"type": "disabled"}},
+            )
+        except Exception as error:
+            duration_ms = (time.monotonic() - started) * 1000.0
+            log_event(
+                run_id=self.run_id, step=step, stage="request", status="error",
+                duration_ms=duration_ms,
+                error={
+                    "type": type(error).__name__,
+                    "status_code": getattr(error, "status_code", None),
+                    "is_timeout": type(error).__name__ == "APITimeoutError",
+                },
+            )
+            if type(error).__name__ == "APITimeoutError":
+                raise ModelTimeout(
+                    f"Модель не ответила за {model_timeout} с. Повторный запрос не отправляется."
+                ) from error
+            raise
+
         choice = response.choices[0]
         message = {"role": "assistant", "content": choice.message.content}
         if choice.message.tool_calls:
@@ -61,6 +102,12 @@ class DeepSeekModel:
             ]
         reply = {"message": message, "finish_reason": choice.finish_reason}
         self.last_response = deepcopy(reply)
+
+        log_event(
+            run_id=self.run_id, step=step, stage="response", status="ok",
+            duration_ms=(time.monotonic() - started) * 1000.0,
+            details={"finish_reason": reply["finish_reason"], "tool_calls": len(message.get("tool_calls") or [])},
+        )
         return reply
 
     def close(self):

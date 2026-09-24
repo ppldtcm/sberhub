@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 import traceback
 
+from clients import ModelTimeout
+
 
 def clean(text):
     text = str(text)
@@ -25,7 +27,10 @@ def server_reason(error):
 def describe_error(error):
     name = type(error).__name__
     status = getattr(error, "status_code", None)
-    if name == "APITimeoutError":
+    if isinstance(error, ModelTimeout):
+        message = ("Модель не ответила за отведённое время. "
+                   "Повторный запрос не отправлялся.")
+    elif name == "APITimeoutError":
         message = "DeepSeek не ответил за отведённое время."
     elif name == "APIConnectionError":
         message = "Не удалось соединиться с DeepSeek."
@@ -63,7 +68,6 @@ def describe_error(error):
     else:
         message = str(error) if isinstance(error, RuntimeError) else f"{name}: {error}"
 
-    # Одно место в учебном коде даёт точку для исследования, не подсказывая исправление.
     root = Path(__file__).resolve().parent
     frames = [frame for frame in traceback.extract_tb(error.__traceback__)
               if Path(frame.filename).resolve().parent == root
