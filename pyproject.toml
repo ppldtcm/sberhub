@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-agent-classroom"
+version = "0.1.0"
+description = "Учебный локальный агент с инструментами"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[project.scripts]
+# Замените kermit на своё имя команды. Справа укажите путь к своей main.
+# Установите проект через pip install -e . в своём .venv и добавьте Scripts/bin в PATH.
+# Команды для вашей ОС приведены в README раздатки.
+sber = "local_agent.cli:main"
+
+# Этот шаблон собирает файлы рядом с run.py в пакет local_agent.
+# Если у вас другая структура, согласуйте её с записью команды выше.
+# Импорты внутри пакета должны вести к вашим модулям агента.
+[tool.setuptools]
+packages = ["local_agent"]
+#package-dir = {local_agent = "."}
+include-package-data = false
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
