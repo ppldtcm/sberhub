@@ -4,11 +4,11 @@ import argparse
 import sys
 import uuid
 
-from clients import DeepSeekModel
-from config import CONFIG
-from diagnostics import describe_error
-import harness
-from logging_utils import event as log_event
+from .clients import DeepSeekModel
+from .config import CONFIG
+from .diagnostics import describe_error
+from . import harness
+from .logging_utils import event as log_event
 
 
 def main(argv=None):
@@ -23,7 +23,6 @@ def main(argv=None):
     parser.add_argument("--tool-timeout", type=float, default=None, help="Таймаут выполнения инструмента, с")
     parser.add_argument("--watchdog", type=int, default=None, help="Жёсткий лимит запросов к API")
     parser.add_argument("--tools", default=None, help="Разрешённые инструменты через запятую")
-    parser.add_argument("--workspace", default=None, help="Рабочая папка для read_file")
     parser.add_argument("-h", "--help", action="help", help="Показать справку")
     args = parser.parse_args(argv)
 
@@ -34,7 +33,6 @@ def main(argv=None):
         )
         return 2
 
-    # Значения из CLI попадают в единую конфигурацию.
     if args.max_steps is not None:
         CONFIG.max_steps = args.max_steps
     if args.model_timeout is not None:
@@ -45,16 +43,11 @@ def main(argv=None):
         CONFIG.watchdog = args.watchdog
     if args.tools is not None:
         CONFIG.allowed_tools = [item.strip() for item in args.tools.split(",") if item.strip()]
-    if args.workspace is not None:
-        CONFIG.workspace = args.workspace
 
     run_id = uuid.uuid4().hex[:12]
     model = None
     try:
-        # Проверяем конфигурацию до первого запроса: понятная ошибка вместо
-        # непредсказуемого поведения в середине работы.
         CONFIG.validate()
-        CONFIG.resolved_workspace()
 
         log_event(
             run_id=run_id,
@@ -65,9 +58,9 @@ def main(argv=None):
         )
 
         model = DeepSeekModel(run_id=run_id)
-        result = harness.run(model, args.question, run_id=run_id)
+        result = harness.run(model, args.question, CONFIG)
 
-        if result["finish_reason"] == "max_steps":
+        if result.reason == "max_steps":
             print(
                 f"Остановлено: достигнут лимит шагов ({CONFIG.max_steps}). "
                 "Модель не получила новый запрос.",
@@ -75,7 +68,7 @@ def main(argv=None):
             )
             return 3
 
-        if result["finish_reason"] == "model_timeout":
+        if result.reason == "model_timeout":
             print(
                 f"Остановлено: модель не ответила за {CONFIG.model_timeout} с. "
                 "Повторный запрос не отправлялся.",
@@ -83,10 +76,10 @@ def main(argv=None):
             )
             return 4
 
-        if result["finish_reason"] != "stop":
-            raise RuntimeError(f"Неизвестная причина завершения: {result['finish_reason']}")
+        if result.reason != "stop":
+            raise RuntimeError(f"Неизвестная причина завершения: {result.reason}")
 
-        answer = result["content"]
+        answer = result.answer
         if not isinstance(answer, str) or not answer.strip():
             raise RuntimeError("Программа завершилась без текстового ответа.")
 

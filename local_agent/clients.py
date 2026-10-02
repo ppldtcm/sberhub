@@ -5,12 +5,12 @@ import os
 from pathlib import Path
 import time
 
-from config import CONFIG
-from logging_utils import event as log_event
+from .config import CONFIG
+from .logging_utils import event as log_event
 
 
 DEFAULT_MODEL = "deepseek-flash"
-ENV_PATH = Path(__file__).resolve().with_name(".env")
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
 class RequestLimitExceeded(RuntimeError):
@@ -22,20 +22,25 @@ class ModelTimeout(RuntimeError):
 
 
 class DeepSeekModel:
-    def __init__(self, model=DEFAULT_MODEL, *, client=None, run_id="local"):
+    def __init__(self, model=DEFAULT_MODEL, *, client=None, run_id="local", config=None):
+        self.config = config if config is not None else CONFIG
+
         if client is None:
             from dotenv import load_dotenv
 
             load_dotenv(ENV_PATH, override=False, encoding="utf-8-sig")
             api_key = os.environ.get("DEEPSEEK_API_KEY")
             if not api_key:
-                raise RuntimeError("Заполните DEEPSEEK_API_KEY в .env рядом с clients.py (образец: .env.example)")
+                raise RuntimeError(
+                    "Заполните DEEPSEEK_API_KEY в .env рядом с clients.py "
+                    "(образец: .env.example)"
+                )
             from openai import OpenAI
 
             client = OpenAI(
                 api_key=api_key,
                 base_url="https://api.deepseek.com",
-                timeout=CONFIG.model_timeout,
+                timeout=self.config.model_timeout,
                 max_retries=0,
             )
         self.client = client
@@ -46,9 +51,9 @@ class DeepSeekModel:
         self._step = 0
 
     def __call__(self, *, messages, tools):
-        watchdog = CONFIG.watchdog
-        model_timeout = CONFIG.model_timeout
-        CONFIG.validate()
+        watchdog = self.config.watchdog
+        model_timeout = self.config.model_timeout
+        self.config.validate()
 
         if self.calls >= watchdog:
             log_event(
@@ -106,7 +111,10 @@ class DeepSeekModel:
         log_event(
             run_id=self.run_id, step=step, stage="response", status="ok",
             duration_ms=(time.monotonic() - started) * 1000.0,
-            details={"finish_reason": reply["finish_reason"], "tool_calls": len(message.get("tool_calls") or [])},
+            details={
+                "finish_reason": reply["finish_reason"],
+                "tool_calls": len(message.get("tool_calls") or []),
+            },
         )
         return reply
 

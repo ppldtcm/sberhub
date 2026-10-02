@@ -1,0 +1,2 @@
+[console_scripts]
+sber = local_agent.cli:main

@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 import traceback
 
-from clients import ModelTimeout
+from .clients import ModelTimeout
 
 
 def clean(text):
